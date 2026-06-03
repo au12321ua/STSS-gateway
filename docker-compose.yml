@@ -1,0 +1,112 @@
+# ═══════════════════════════════════════════════════════════════════
+# STSS Gateway — Docker Compose
+#
+# Orchestrates the Nginx gateway, Auth Service, Info Service, and
+# an optional SPA front-end for local development / testing.
+#
+# Usage:
+#   docker compose up -d              # start everything
+#   docker compose logs -f gateway    # tail gateway logs
+#   docker compose --profile dev up   # include SPA dev server
+# ═══════════════════════════════════════════════════════════════════
+services:
+  # ── Gateway ────────────────────────────────────────────────────
+  gateway:
+    build: .
+    image: stss-gateway:latest
+    container_name: stss-gateway
+    ports:
+      - "${GATEWAY_PORT:-8000}:${GATEWAY_PORT:-8000}"
+    environment:
+      AUTH_SERVICE_URL:      "${AUTH_SERVICE_URL:-auth_service:8001}"
+      INFO_SERVICE_URL:      "${INFO_SERVICE_URL:-info_service:8002}"
+      GATEWAY_PORT:          "${GATEWAY_PORT:-8000}"
+      CORS_ORIGINS:          "${CORS_ORIGINS:-http://localhost:5173,http://localhost:3000}"
+      RATE_LIMIT_LOGIN:      "${RATE_LIMIT_LOGIN:-10r/m}"
+      GATEWAY_CLIENT_ID:     "${GATEWAY_CLIENT_ID:-gateway}"
+      GATEWAY_CLIENT_SECRET: "${GATEWAY_CLIENT_SECRET:-change-me-gateway-secret}"
+    depends_on:
+      auth_service:
+        condition: service_healthy
+      info_service:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - stss-net
+    healthcheck:
+      test:     ["CMD-SHELL", "curl -fsS http://localhost:$${GATEWAY_PORT:-8000}/api/v1/health || exit 1"]
+      interval: 30s
+      timeout:  5s
+      retries:  3
+
+  # ── Auth Service (provided by P2-A team) ───────────────────────
+  auth_service:
+    image: ${AUTH_SERVICE_IMAGE:-stss-auth:latest}
+    container_name: stss-auth
+    ports:
+      - "8001:8001"
+    environment:
+      # Pass through any auth-service-specific env vars here.
+      # The gateway proxies /api/v1/internal/verify and /auth/* to
+      # this service.
+    restart: unless-stopped
+    networks:
+      - stss-net
+    healthcheck:
+      test:     ["CMD-SHELL", "curl -fsS http://localhost:8001/api/v1/health || exit 1"]
+      interval: 15s
+      timeout:  3s
+      retries:  3
+
+  # ── Info Service (provided by P2-A team) ───────────────────────
+  info_service:
+    image: ${INFO_SERVICE_IMAGE:-stss-info:latest}
+    container_name: stss-info
+    ports:
+      - "8002:8002"
+    environment:
+      # Pass through any info-service-specific env vars here.
+      # The gateway proxies /api/v1/info/*
+      # to this service.
+    restart: unless-stopped
+    networks:
+      - stss-net
+    healthcheck:
+      test:     ["CMD-SHELL", "curl -fsS http://localhost:8002/api/v1/health || exit 1"]
+      interval: 15s
+      timeout:  3s
+      retries:  3
+
+  # ── SPA Front-end (optional, dev profile) ──────────────────────
+  # Mount your Vite / Webpack dist/ directory into the gateway's
+  # /usr/share/nginx/html, or use this dev service with a Vite proxy.
+  frontend-dev:
+    image: node:22-alpine
+    container_name: stss-frontend-dev
+    profiles: ["dev"]
+    working_dir: /app
+    command: npx vite --host 0.0.0.0 --port 5173
+    ports:
+      - "5173:5173"
+    volumes:
+      - ${FRONTEND_PATH:-./frontend}:/app
+    networks:
+      - stss-net
+
+  # ── SPA production build (optional) ────────────────────────────
+  # Build the front-end and serve it directly from the gateway.
+  # frontend-build:
+  #   image: node:22-alpine
+  #   profiles: ["build"]
+  #   working_dir: /app
+  #   command: sh -c "npm install && npm run build"
+  #   volumes:
+  #     - ${FRONTEND_PATH:-./frontend}:/app
+  #     - dist:/app/dist
+
+networks:
+  stss-net:
+    driver: bridge
+
+# volumes:
+#   dist:

@@ -1,0 +1,36 @@
+# ── Git ──────────────────────────────────────────────────────────
+.git
+.gitignore
+.gitattributes
+
+# ── Editor / IDE ─────────────────────────────────────────────────
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# ── Node (SPA dependencies — not needed in gateway image) ────────
+node_modules
+frontend
+*.lock
+package.json
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# ── Docs ─────────────────────────────────────────────────────────
+*.md
+!README.md
+docs
+
+# ── OS junk ──────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ── Docker ───────────────────────────────────────────────────────
+Dockerfile
+.dockerignore
+docker-compose*.yml
+.env
+.env.*

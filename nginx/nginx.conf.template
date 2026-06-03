@@ -1,0 +1,289 @@
+# ═══════════════════════════════════════════════════════════════════
+# STSS Gateway — Nginx Configuration (template)
+#
+# Environment variables (substituted by entrypoint via envsubst):
+#   AUTH_SERVICE_URL         Auth Service upstream    (default: auth_service:8001)
+#   INFO_SERVICE_URL         Info Service upstream    (default: info_service:8002)
+#   GATEWAY_PORT             Listen port              (default: 8000)
+#   CORS_ORIGINS             Comma-separated allowed origins
+#   RATE_LIMIT_LOGIN         Login rate limit          (default: 10r/m)
+#   GATEWAY_CLIENT_ID        Gateway service client ID (default: gateway)
+#   GATEWAY_CLIENT_SECRET    Gateway service secret
+# ═══════════════════════════════════════════════════════════════════
+
+# ── Dynamic modules ──────────────────────────────────────────────
+load_module modules/ngx_http_js_module.so;
+
+# ── Worker & Event ───────────────────────────────────────────────
+worker_processes auto;
+error_log       /dev/stderr warn;
+pid             /var/run/nginx.pid;
+
+events {
+    worker_connections 1024;
+    multi_accept       on;
+}
+
+http {
+    # ── NJS ──────────────────────────────────────────────────────
+    js_import  auth from /etc/nginx/njs/auth.js;
+
+    # CORS origins — read by corsHeaderFilter njs function
+    js_var     $cors_allowed_origins '${CORS_ORIGINS}';
+
+    # Gateway service credentials — read by verifyToken for
+    # authenticating to the Auth Service as a trusted caller
+    js_var     $gateway_client_id     '${GATEWAY_CLIENT_ID}';
+    js_var     $gateway_client_secret '${GATEWAY_CLIENT_SECRET}';
+
+    # ── Basics ───────────────────────────────────────────────────
+    include       /etc/nginx/mime.types;
+    default_type  application/octet-stream;
+    server_tokens off;
+    sendfile      on;
+    tcp_nopush    on;
+    tcp_nodelay   on;
+
+    # ── Logging ──────────────────────────────────────────────────
+    log_format gateway 'addr=$remote_addr user="$remote_user" '
+                       'method=$request_method path="$request_uri" '
+                       'status=$status bytes=$body_bytes_sent '
+                       'rt=$request_time ustat=$upstream_status '
+                       'uaddr=$upstream_addr req_id=$request_id '
+                       'ref="$http_referer" ua="$http_user_agent"';
+
+    access_log /dev/stdout gateway;
+
+    # ── Rate Limiting ────────────────────────────────────────────
+    limit_req_zone $binary_remote_addr zone=login_limit:10m rate=${RATE_LIMIT_LOGIN};
+
+    # ── Upstreams ────────────────────────────────────────────────
+    upstream auth_upstream {
+        server ${AUTH_SERVICE_URL};
+        keepalive 32;
+    }
+
+    upstream info_upstream {
+        server ${INFO_SERVICE_URL};
+        keepalive 32;
+    }
+
+    # ═════════════════════════════════════════════════════════════
+    # PROXY DEFAULTS
+    # ═════════════════════════════════════════════════════════════
+    proxy_http_version      1.1;
+
+    proxy_connect_timeout   5s;
+    proxy_read_timeout      30s;
+    proxy_send_timeout      30s;
+
+    proxy_next_upstream     error timeout invalid_header http_502 http_503;
+    proxy_next_upstream_tries 2;
+
+    # ═════════════════════════════════════════════════════════════
+    # SERVER
+    # ═════════════════════════════════════════════════════════════
+    server {
+        listen ${GATEWAY_PORT};
+        server_name _;
+
+        client_max_body_size 1m;
+
+        # ── Per-request user identity (populated by js_set) ──────
+        js_set $verify_user_id        auth.getUserId;
+        js_set $verify_user_role      auth.getUserRole;
+        js_set $verify_user_permissions auth.getUserPermissions;
+
+        # Cached service token (for /internal/auth/verify-user)
+        js_set $svc_token auth.getCachedServiceToken;
+
+        # ── Proxy headers (ALL locations inherit this set) ───────
+        proxy_set_header Host                $host;
+        proxy_set_header X-Real-IP           $remote_addr;
+        proxy_set_header X-Forwarded-For     $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto   $scheme;
+        proxy_set_header X-Request-ID        $request_id;
+        proxy_set_header X-User-Id           $verify_user_id;
+        proxy_set_header X-User-Role         $verify_user_role;
+        proxy_set_header X-User-Permissions  $verify_user_permissions;
+        proxy_set_header Connection          "";
+
+        # ── CORS header filter (njs) ─────────────────────────────
+        js_header_filter auth.corsHeaderFilter;
+
+        # ── Fixed security headers ───────────────────────────────
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-Frame-Options        "DENY"   always;
+        add_header X-XSS-Protection       "1; mode=block" always;
+        add_header Referrer-Policy        "strict-origin-when-cross-origin" always;
+
+        # ── OPTIONS preflight — short-circuit before auth ────────
+        if ($request_method = 'OPTIONS') {
+            return 204;
+        }
+
+        # ═════════════════════════════════════════════════════════
+        # INTERNAL LOCATIONS (never reachable from outside)
+        # ═════════════════════════════════════════════════════════
+
+        # ── Step 1: Obtain gateway service token ─────────────────
+        # Called by NJS getServiceToken() when the cache is cold.
+        # Proxies POST /api/v1/auth/sys/login to the Auth Service.
+        location = /internal/auth/sys-login {
+            internal;
+            proxy_pass              http://auth_upstream/api/v1/auth/sys/login;
+            proxy_method            POST;
+            proxy_set_header        Content-Type   "application/json";
+            proxy_read_timeout      5s;
+            proxy_connect_timeout   3s;
+        }
+
+        # ── Step 2: Verify user token ────────────────────────────
+        # Called by NJS verifyToken() after obtaining a service token.
+        # Uses $svc_token (from js_set) as the Authorization header
+        # and passes the user's token in the JSON body.
+        location = /internal/auth/verify-user {
+            internal;
+            proxy_pass              http://auth_upstream/api/v1/internal/verify;
+            proxy_method            POST;
+            proxy_set_header        Authorization  "Bearer $svc_token";
+            proxy_set_header        Content-Type   "application/json";
+            proxy_read_timeout      5s;
+            proxy_connect_timeout   3s;
+        }
+
+        # ── Auth verification entry point ────────────────────────
+        # auth_request target.  Runs the two-step njs flow:
+        #   getServiceToken → verify-user → store identity → return
+        location = /internal/auth/verify {
+            internal;
+            js_content auth.verifyToken;
+        }
+
+        # ── Internal health-check probes ─────────────────────────
+        location = /internal/health/auth {
+            internal;
+            proxy_pass              http://auth_upstream/api/v1/health;
+            proxy_read_timeout      3s;
+            proxy_connect_timeout   3s;
+        }
+        location = /internal/health/info {
+            internal;
+            proxy_pass              http://info_upstream/api/v1/health;
+            proxy_read_timeout      3s;
+            proxy_connect_timeout   3s;
+        }
+
+        # ═════════════════════════════════════════════════════════
+        # BLOCKED — /api/v1/internal/* must NOT be reachable from
+        #           the public internet (returns 403).
+        #           Must appear BEFORE the catch-all /api/v1/ regex.
+        # ═════════════════════════════════════════════════════════
+        location ~ ^/api/v1/internal/ {
+            return 403;
+        }
+
+        # ═════════════════════════════════════════════════════════
+        # HEALTH CHECK (gateway aggregate)
+        # ═════════════════════════════════════════════════════════
+        location = /api/v1/health {
+            js_content auth.healthCheck;
+        }
+
+        # ═════════════════════════════════════════════════════════
+        # AUTH ROUTES — NO token verification
+        #
+        # NOTE: Auth Service mounts auth routes at /api/v1/auth/*,
+        #       so we rewrite the shorter /auth/* paths.
+        # ═════════════════════════════════════════════════════════
+
+        location = /auth/login {
+            limit_req  zone=login_limit burst=5 nodelay;
+            proxy_pass http://auth_upstream/api/v1/auth/login;
+        }
+
+        location = /auth/sys/login {
+            limit_req  zone=login_limit burst=3 nodelay;
+            proxy_pass http://auth_upstream/api/v1/auth/sys/login;
+        }
+
+        location = /auth/refresh {
+            proxy_pass http://auth_upstream/api/v1/auth/refresh;
+        }
+
+        location = /auth/public-key {
+            proxy_pass http://auth_upstream/api/v1/auth/public-key;
+        }
+
+        # ═════════════════════════════════════════════════════════
+        # AUTH ROUTES — requires Bearer token verification
+        # ═════════════════════════════════════════════════════════
+
+        location = /auth/logout {
+            auth_request /internal/auth/verify;
+            proxy_pass   http://auth_upstream/api/v1/auth/logout;
+        }
+
+        location = /auth/me {
+            auth_request /internal/auth/verify;
+            proxy_pass   http://auth_upstream/api/v1/auth/me;
+        }
+
+        location = /auth/change-password {
+            auth_request /internal/auth/verify;
+            proxy_pass   http://auth_upstream/api/v1/auth/change-password;
+        }
+
+        # ═════════════════════════════════════════════════════════
+        # API — /api/v1/auth/* → Auth Service (protected)
+        #       Direct passthrough — Auth Service already has this
+        #       prefix, no rewrite needed.
+        # ═════════════════════════════════════════════════════════
+        location ~ ^/api/v1/auth/ {
+            auth_request /internal/auth/verify;
+            proxy_pass   http://auth_upstream;
+        }
+
+        # ═════════════════════════════════════════════════════════
+        # API — large-body routes → Info Service
+        #       (must appear BEFORE the catch-all /api/v1/info regex)
+        # ═════════════════════════════════════════════════════════
+
+        location ~ ^/api/v1/info/files {
+            auth_request          /internal/auth/verify;
+            client_max_body_size  10m;
+            proxy_read_timeout    60s;
+            proxy_pass            http://info_upstream;
+        }
+
+        location = /api/v1/info/users/import {
+            auth_request          /internal/auth/verify;
+            client_max_body_size  10m;
+            proxy_read_timeout    60s;
+            proxy_pass            http://info_upstream;
+        }
+
+        # ═════════════════════════════════════════════════════════
+        # API — /api/v1/info/* (remaining) → Info Service (protected)
+        #       LAST regex — catches everything not matched above
+        # ═════════════════════════════════════════════════════════
+        location ~ ^/api/v1/info/ {
+            auth_request /internal/auth/verify;
+            proxy_pass   http://info_upstream;
+        }
+
+        # ═════════════════════════════════════════════════════════
+        # SPA — static files served from /usr/share/nginx/html
+        # ═════════════════════════════════════════════════════════
+        location / {
+            root      /usr/share/nginx/html;
+            index     index.html;
+            try_files $uri $uri/ /index.html;
+
+            location ~* \.(?:js|css|svg|woff2?|ttf|eot|png|jpg|jpeg|gif|ico|webp)$ {
+                expires      1y;
+                add_header   Cache-Control "public, immutable";
+            }
+        }
+    }
+}
