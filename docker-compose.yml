@@ -1,19 +1,23 @@
 # ═══════════════════════════════════════════════════════════════════
 # STSS Gateway — Docker Compose
 #
-# Orchestrates the Nginx gateway, Auth Service, Info Service, and
-# an optional SPA front-end for local development / testing.
+# Orchestrates the Nginx gateway, Auth Service, Info Service, and a
+# one-shot seed service for initial data provisioning.
+#
+# Images are pulled from GitHub Container Registry (GHCR) by default.
+# Set *_IMAGE env vars to override (see .env.example).
 #
 # Usage:
-#   docker compose up -d              # start everything
-#   docker compose logs -f gateway    # tail gateway logs
-#   docker compose --profile dev up   # include SPA dev server
+#   docker compose up -d                   # start everything
+#   docker compose --profile seed up seed  # one-time data seeding
+#   docker compose logs -f gateway         # tail gateway logs
+#   docker compose --profile dev up        # include SPA dev server
 # ═══════════════════════════════════════════════════════════════════
 services:
   # ── Gateway ────────────────────────────────────────────────────
   gateway:
     build: .
-    image: stss-gateway:latest
+    image: ${GATEWAY_IMAGE:-ghcr.io/au12321ua/stss-gateway:latest}
     container_name: stss-gateway
     ports:
       - "${GATEWAY_PORT:-8000}:${GATEWAY_PORT:-8000}"
@@ -38,48 +42,124 @@ services:
       interval: 30s
       timeout:  5s
       retries:  3
+      start_period: 10s
 
-  # ── Auth Service (provided by P2-A team) ───────────────────────
+  # ── Auth Service ───────────────────────────────────────────────
   auth_service:
-    image: ${AUTH_SERVICE_IMAGE:-stss-auth:latest}
+    image: ${AUTH_SERVICE_IMAGE:-ghcr.io/au12321ua/stss-auth:latest}
     container_name: stss-auth
     ports:
       - "8001:8001"
     environment:
-      # Pass through any auth-service-specific env vars here.
-      # The gateway proxies /api/v1/internal/verify and /auth/* to
-      # this service.
+      # Runtime
+      ENV:              "${ENV:-development}"
+      LOG_LEVEL:        "${LOG_LEVEL:-DEBUG}"
+
+      # JWT — shared secret, must match across auth & info services
+      TOKEN_SECRET_KEY: "${TOKEN_SECRET_KEY:-change-me-in-production}"
+
+      # Databases (SQLite on named volumes)
+      AUTH_DATABASE_URL:  "sqlite+aiosqlite:///./data/auth.db"
+      AUDIT_DATABASE_URL: "sqlite+aiosqlite:////app/data/audit.db"
+
+      # Gateway service client — MUST match GATEWAY_CLIENT_* vars above
+      SERVICE_CLIENT_GATEWAY_ID:       "${GATEWAY_CLIENT_ID:-gateway}"
+      SERVICE_CLIENT_GATEWAY_SECRET:   "${GATEWAY_CLIENT_SECRET:-change-me-gateway-secret}"
+      SERVICE_CLIENT_GATEWAY_SCOPE:    "internal:verify"
+      SERVICE_CLIENT_GATEWAY_AUDIENCE: "gateway"
+
+      # Info Service client — credentials that Info Service uses to call /auth/sys/login
+      SERVICE_CLIENT_INFO_SERVICE_ID:       "info_service"
+      SERVICE_CLIENT_INFO_SERVICE_SECRET:   "${INFO_SERVICE_CLIENT_SECRET:-change-me-service-secret}"
+      SERVICE_CLIENT_INFO_SERVICE_SCOPE:    "user:read course:read calendar:read"
+      SERVICE_CLIENT_INFO_SERVICE_AUDIENCE: "info_service"
+    volumes:
+      - auth_data:/app/auth_service/data
+      - audit_data:/app/data
     restart: unless-stopped
     networks:
       - stss-net
     healthcheck:
-      test:     ["CMD-SHELL", "curl -fsS http://localhost:8001/api/v1/health || exit 1"]
+      test:     ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/api/v1/health')"]
       interval: 15s
       timeout:  3s
-      retries:  3
+      retries:  5
+      start_period: 10s
 
-  # ── Info Service (provided by P2-A team) ───────────────────────
+  # ── Info Service ───────────────────────────────────────────────
   info_service:
-    image: ${INFO_SERVICE_IMAGE:-stss-info:latest}
+    image: ${INFO_SERVICE_IMAGE:-ghcr.io/au12321ua/stss-info:latest}
     container_name: stss-info
     ports:
       - "8002:8002"
     environment:
-      # Pass through any info-service-specific env vars here.
-      # The gateway proxies /api/v1/info/*
-      # to this service.
+      # Runtime
+      ENV:              "${ENV:-development}"
+      LOG_LEVEL:        "${LOG_LEVEL:-DEBUG}"
+
+      # JWT — shared secret, must match auth_service
+      TOKEN_SECRET_KEY: "${TOKEN_SECRET_KEY:-change-me-in-production}"
+
+      # Databases (SQLite on named volumes)
+      INFO_DATABASE_URL:  "sqlite+aiosqlite:///./data/info.db"
+      AUDIT_DATABASE_URL: "sqlite+aiosqlite:////app/data/audit.db"
+
+      # Auth Service — cross-service calls (Docker internal hostname)
+      AUTH_SERVICE_URL:    "http://auth_service:8001"
+      AUTH_SERVICE_TIMEOUT: "10"
+
+      # Info Service's own credentials for calling /auth/sys/login
+      AUTH_SERVICE_CLIENT_ID:     "info_service"
+      AUTH_SERVICE_CLIENT_SECRET: "${INFO_SERVICE_CLIENT_SECRET:-change-me-service-secret}"
+
+      # File uploads (on named volume)
+      UPLOAD_DIR:           "/app/info_service/uploads"
+      MAX_UPLOAD_SIZE_MB:   "10"
+      ALLOWED_UPLOAD_TYPES: "jpg,jpeg,png,pdf,csv"
+    volumes:
+      - info_data:/app/info_service/data
+      - uploads:/app/info_service/uploads
+      - audit_data:/app/data
     restart: unless-stopped
     networks:
       - stss-net
+    depends_on:
+      auth_service:
+        condition: service_healthy
     healthcheck:
-      test:     ["CMD-SHELL", "curl -fsS http://localhost:8002/api/v1/health || exit 1"]
+      test:     ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8002/api/v1/info/health')"]
       interval: 15s
       timeout:  3s
-      retries:  3
+      retries:  5
+      start_period: 10s
+
+  # ── Seed — one-shot data initializer ───────────────────────────
+  # Runs once to populate roles, permissions, and default admin user.
+  # Idempotent — safe to re-run on existing volumes.
+  # Usage: docker compose --profile seed up seed
+  seed:
+    image: ${SEED_IMAGE:-ghcr.io/au12321ua/stss-seed:latest}
+    container_name: stss-seed
+    profiles: ["seed"]
+    environment:
+      TOKEN_SECRET_KEY:  "${TOKEN_SECRET_KEY:-change-me-in-production}"
+      AUTH_DATABASE_URL: "sqlite+aiosqlite:////app/auth_service/data/auth.db"
+      INFO_DATABASE_URL: "sqlite+aiosqlite:////app/info_service/data/info.db"
+      AUDIT_DATABASE_URL: "sqlite+aiosqlite:////app/data/audit.db"
+      AUTH_SERVICE_URL:  "http://auth_service:8001"
+    volumes:
+      - auth_data:/app/auth_service/data
+      - info_data:/app/info_service/data
+      - audit_data:/app/data
+    depends_on:
+      auth_service:
+        condition: service_healthy
+      info_service:
+        condition: service_healthy
+    networks:
+      - stss-net
 
   # ── SPA Front-end (optional, dev profile) ──────────────────────
-  # Mount your Vite / Webpack dist/ directory into the gateway's
-  # /usr/share/nginx/html, or use this dev service with a Vite proxy.
   frontend-dev:
     image: node:22-alpine
     container_name: stss-frontend-dev
@@ -93,20 +173,12 @@ services:
     networks:
       - stss-net
 
-  # ── SPA production build (optional) ────────────────────────────
-  # Build the front-end and serve it directly from the gateway.
-  # frontend-build:
-  #   image: node:22-alpine
-  #   profiles: ["build"]
-  #   working_dir: /app
-  #   command: sh -c "npm install && npm run build"
-  #   volumes:
-  #     - ${FRONTEND_PATH:-./frontend}:/app
-  #     - dist:/app/dist
-
 networks:
   stss-net:
     driver: bridge
 
-# volumes:
-#   dist:
+volumes:
+  auth_data:
+  info_data:
+  uploads:
+  audit_data:

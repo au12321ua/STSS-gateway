@@ -25,11 +25,45 @@
 # 1. 克隆仓库
 git clone <repo-url> && cd STSS-gateway
 
-# 2. 启动（需要 auth_service + info_service 镜像）
+# 2. 创建 .env（从模板复制后修改密钥）
+cp .env.example .env
+
+# 3. 一键启动（从 GHCR 拉取后端镜像 + 本地构建网关）
 docker compose up -d
 
-# 3. 验证
+# 4. 首次使用时初始化数据（角色、权限、管理员用户）
+docker compose --profile seed up seed
+
+# 5. 验证
 curl http://localhost:8000/api/v1/health
+```
+
+### 无需后端源码即可测试
+
+网关的 `docker-compose.yml` 默认从 **GitHub Container Registry (GHCR)** 拉取后端镜像：
+- `ghcr.io/au12321ua/stss-auth:latest`
+- `ghcr.io/au12321ua/stss-info:latest`
+- `ghcr.io/au12321ua/stss-seed:latest`
+
+网关本身从本地 `Dockerfile` 构建（如需使用已发布的网关镜像，设置 `GATEWAY_IMAGE` 环境变量）。
+
+### 本地构建后端镜像
+
+如果后端源码（`group1-base`）在 sibling 目录：
+
+```bash
+cp docker-compose.override.yml.example docker-compose.override.yml
+docker compose build
+docker compose up -d
+docker compose --profile seed up seed
+```
+
+### 私有仓库认证
+
+如果 GHCR 中的镜像为私有，需要先登录：
+
+```bash
+echo $GITHUB_TOKEN | docker login ghcr.io -u <your-username> --password-stdin
 ```
 
 ## 路由表
@@ -75,15 +109,37 @@ curl http://localhost:8000/api/v1/health
 
 ## 环境变量
 
-| 变量                   | 默认值                                      | 说明                                    |
-|------------------------|---------------------------------------------|-----------------------------------------|
-| `AUTH_SERVICE_URL`     | `auth_service:8001`                         | Auth Service 上游地址                   |
-| `INFO_SERVICE_URL`     | `info_service:8002`                         | Info Service 上游地址                   |
-| `GATEWAY_PORT`         | `8000`                                      | 网关监听端口                            |
-| `CORS_ORIGINS`         | `http://localhost:5173,http://localhost:3000` | 允许的 CORS 域名（逗号分隔）           |
-| `RATE_LIMIT_LOGIN`     | `10r/m`                                     | 登录接口限流速率（Nginx 语法）          |
-| `GATEWAY_CLIENT_ID`    | `gateway`                                   | 网关服务账号（调用 /internal/verify）   |
-| `GATEWAY_CLIENT_SECRET`| `change-me-gateway-secret`                  | 网关服务账号密钥（需与 Auth 侧一致）    |
+| 变量                        | 默认值                                      | 说明                                    |
+|-----------------------------|---------------------------------------------|-----------------------------------------|
+| `AUTH_SERVICE_URL`          | `auth_service:8001`                         | Auth Service 上游地址                   |
+| `INFO_SERVICE_URL`          | `info_service:8002`                         | Info Service 上游地址                   |
+| `GATEWAY_PORT`              | `8000`                                      | 网关监听端口                            |
+| `CORS_ORIGINS`              | `http://localhost:5173,http://localhost:3000` | 允许的 CORS 域名（逗号分隔）           |
+| `RATE_LIMIT_LOGIN`          | `10r/m`                                     | 登录接口限流速率（Nginx 语法）          |
+| `GATEWAY_CLIENT_ID`         | `gateway`                                   | 网关服务账号（调用 /internal/verify）   |
+| `GATEWAY_CLIENT_SECRET`     | `change-me-gateway-secret`                  | 网关服务账号密钥（需与 Auth 侧一致）    |
+| `TOKEN_SECRET_KEY`          | `change-me-in-production`                   | JWT 签名密钥，auth 和 info 服务必须一致 |
+| `INFO_SERVICE_CLIENT_SECRET`| `change-me-service-secret`                  | Info Service 调用 Auth Service 的凭据   |
+| `ENV`                       | `development`                               | 运行环境（development / production）    |
+| `LOG_LEVEL`                 | `DEBUG`                                     | 日志级别                                |
+
+### 凭据一致性
+
+以下三个值在网关、Auth Service、Info Service 之间必须一致。
+`docker-compose.yml` 已通过引用同一个环境变量自动保证一致性——只需在 `.env` 中设置即可：
+
+```
+GATEWAY_CLIENT_SECRET ────────────► auth_service: SERVICE_CLIENT_GATEWAY_SECRET
+                                        (gateway 调用 /internal/verify)
+
+INFO_SERVICE_CLIENT_SECRET ───┬──► auth_service: SERVICE_CLIENT_INFO_SERVICE_SECRET
+                              └──► info_service: AUTH_SERVICE_CLIENT_SECRET
+                                      (info 调用 /auth/sys/login)
+
+TOKEN_SECRET_KEY ───────┬────────► auth_service: TOKEN_SECRET_KEY
+                        └────────► info_service:  TOKEN_SECRET_KEY
+                                      (JWT 签名/验证)
+```
 
 ### CORS 域名配置
 
@@ -141,7 +197,32 @@ rate](https://nginx.org/en/docs/http/ngx_http_limit_req_module.html#limit_req_zo
 
 ## Docker 部署
 
-### 构建镜像
+### Compose 部署（推荐）
+
+```bash
+# 1. 配置环境变量
+cp .env.example .env
+# 编辑 .env，至少修改 TOKEN_SECRET_KEY
+
+# 2. 启动全部服务（从 GHCR 拉取镜像）
+docker compose up -d
+
+# 3. 初始化种子数据（首次）
+docker compose --profile seed up seed
+
+# 4. 验证
+curl http://localhost:8000/api/v1/health
+```
+
+### 本地构建后端（无需 GHCR）
+
+```bash
+cp docker-compose.override.yml.example docker-compose.override.yml
+docker compose build
+docker compose up -d
+```
+
+### 构建网关镜像
 
 ```bash
 docker build -t stss-gateway .
@@ -185,13 +266,18 @@ gateway:
 ```
 STSS-gateway/
 ├── nginx/
-│   └── nginx.conf.template   # Nginx 配置模板（envsubst）
+│   └── nginx.conf.template     # Nginx 配置模板（envsubst）
 ├── njs/
-│   └── auth.js               # NJS 脚本：鉴权、CORS、健康检查
+│   └── auth.js                 # NJS 脚本：鉴权、CORS、健康检查
 ├── docker/
-│   └── entrypoint.sh          # 容器入口脚本
+│   └── entrypoint.sh           # 容器入口脚本
+├── .github/
+│   └── workflows/
+│       └── publish.yml         # CI：构建并推送网关镜像到 GHCR
 ├── Dockerfile
-├── docker-compose.yml
+├── docker-compose.yml                  # 主 Compose 文件（GHCR 镜像）
+├── docker-compose.override.yml.example # 本地构建后端覆盖文件
+├── .env.example                       # 环境变量模板
 └── README.md
 ```
 
