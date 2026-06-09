@@ -4,6 +4,7 @@
 # Environment variables (substituted by entrypoint via envsubst):
 #   AUTH_SERVICE_URL         Auth Service upstream    (default: auth_service:8001)
 #   INFO_SERVICE_URL         Info Service upstream    (default: info_service:8002)
+#   COURSE_SELECTION_SERVICE_URL  智能选课(C组) upstream (default: course-selection-api:8003)
 #   GATEWAY_PORT             Listen port              (default: 8000)
 #   CORS_ORIGINS             Comma-separated allowed origins
 #   RATE_LIMIT_LOGIN         Login rate limit          (default: 10r/m)
@@ -64,6 +65,12 @@ http {
 
     upstream info_upstream {
         server ${INFO_SERVICE_URL};
+        keepalive 32;
+    }
+
+    # 智能选课（C 组）服务上游
+    upstream course_selection_upstream {
+        server ${COURSE_SELECTION_SERVICE_URL};
         keepalive 32;
     }
 
@@ -256,6 +263,18 @@ http {
         location ~ ^/api/v1/info/ {
             auth_request /internal/auth/verify;
             proxy_pass   http://info_upstream;
+        }
+
+        # ═════════════════════════════════════════════════════════
+        # API — /api/course-selection/* → 智能选课服务（C 组，protected）
+        #       与 auth/info 同一套：auth_request 校验后注入 X-User-* 身份头。
+        #       SSE（AI 选课助手流式）需关缓冲、放长读超时。
+        # ═════════════════════════════════════════════════════════
+        location ~ ^/api/course-selection/ {
+            auth_request       /internal/auth/verify;
+            proxy_pass         http://course_selection_upstream;
+            proxy_buffering    off;
+            proxy_read_timeout 3600s;
         }
 
         # ═════════════════════════════════════════════════════════
