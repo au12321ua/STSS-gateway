@@ -4,7 +4,11 @@
 # Environment variables (substituted by entrypoint via envsubst):
 #   AUTH_SERVICE_URL         Auth Service upstream    (default: auth_service:8001)
 #   INFO_SERVICE_URL         Info Service upstream    (default: info_service:8002)
-#   COURSE_SELECTION_SERVICE_URL  智能选课(C组) upstream (default: course-selection-api:8003)
+#   SCHEDULE_SERVICE_URL     Schedule Service upstream (default: schedule_service:8003)
+#   COURSE_SELECTION_SERVICE_URL  Course Selection upstream (default: course-selection-api:8004)
+#   FORUM_SERVICE_URL        Forum Service upstream   (default: forum_service:8005)
+#   ONLINE_TEST_SERVICE_URL  Online Test upstream     (default: online_test_service:8006)
+#   GRADE_SERVICE_URL        Grade Service upstream   (default: grade_service:8007)
 #   GATEWAY_PORT             Listen port              (default: 8000)
 #   CORS_ORIGINS             Comma-separated allowed origins
 #   RATE_LIMIT_LOGIN         Login rate limit          (default: 10r/m)
@@ -68,12 +72,6 @@ http {
         keepalive 32;
     }
 
-    # 智能选课（C 组）服务上游
-    upstream course_selection_upstream {
-        server ${COURSE_SELECTION_SERVICE_URL};
-        keepalive 32;
-    }
-
     # ═════════════════════════════════════════════════════════════
     # PROXY DEFAULTS
     # ═════════════════════════════════════════════════════════════
@@ -94,6 +92,15 @@ http {
         server_name _;
 
         client_max_body_size 1m;
+
+        # Docker embedded DNS. Optional business services are resolved at request
+        # time so the gateway can still start before every group backend is wired.
+        resolver 127.0.0.11 valid=30s ipv6=off;
+        set $schedule_service_url         "${SCHEDULE_SERVICE_URL}";
+        set $course_selection_service_url "${COURSE_SELECTION_SERVICE_URL}";
+        set $forum_service_url            "${FORUM_SERVICE_URL}";
+        set $online_test_service_url      "${ONLINE_TEST_SERVICE_URL}";
+        set $grade_service_url            "${GRADE_SERVICE_URL}";
 
         # ── User identity from auth_request response headers ─────
         # Set by auth_request_set after /internal/auth/verify completes
@@ -266,15 +273,46 @@ http {
         }
 
         # ═════════════════════════════════════════════════════════
-        # API — /api/course-selection/* → 智能选课服务（C 组，protected）
-        #       与 auth/info 同一套：auth_request 校验后注入 X-User-* 身份头。
-        #       SSE（AI 选课助手流式）需关缓冲、放长读超时。
+        # API — /api/v1/schedule/* → Schedule Service (protected)
         # ═════════════════════════════════════════════════════════
-        location ~ ^/api/course-selection/ {
+        location ~ ^/api/v1/schedule(?:/|$) {
+            auth_request /internal/auth/verify;
+            proxy_pass   http://$schedule_service_url;
+        }
+
+        # ═════════════════════════════════════════════════════════
+        # API — /api/v1/course-selection/* → Course Selection Service (protected)
+        #       SSE endpoints need buffering disabled and a longer read timeout.
+        # ═════════════════════════════════════════════════════════
+        location ~ ^/api/v1/course-selection(?:/|$) {
             auth_request       /internal/auth/verify;
-            proxy_pass         http://course_selection_upstream;
+            proxy_pass         http://$course_selection_service_url;
             proxy_buffering    off;
             proxy_read_timeout 3600s;
+        }
+
+        # ═════════════════════════════════════════════════════════
+        # API — /api/v1/forum/* → Forum Service (protected)
+        # ═════════════════════════════════════════════════════════
+        location ~ ^/api/v1/forum(?:/|$) {
+            auth_request /internal/auth/verify;
+            proxy_pass   http://$forum_service_url;
+        }
+
+        # ═════════════════════════════════════════════════════════
+        # API — /api/v1/online-test/* → Online Test Service (protected)
+        # ═════════════════════════════════════════════════════════
+        location ~ ^/api/v1/online-test(?:/|$) {
+            auth_request /internal/auth/verify;
+            proxy_pass   http://$online_test_service_url;
+        }
+
+        # ═════════════════════════════════════════════════════════
+        # API — /api/v1/grade/* → Grade Service (protected)
+        # ═════════════════════════════════════════════════════════
+        location ~ ^/api/v1/grade(?:/|$) {
+            auth_request /internal/auth/verify;
+            proxy_pass   http://$grade_service_url;
         }
 
         # ═════════════════════════════════════════════════════════
