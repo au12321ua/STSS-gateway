@@ -30,10 +30,10 @@ services:
       RATE_LIMIT_LOGIN:      "${RATE_LIMIT_LOGIN:-10r/m}"
       GATEWAY_CLIENT_ID:     "${GATEWAY_CLIENT_ID:-gateway}"
       GATEWAY_CLIENT_SECRET: "${GATEWAY_CLIENT_SECRET:-change-me-gateway-secret}"
-      COURSE_SELECTION_SERVICE_URL: "${COURSE_SELECTION_SERVICE_URL:-course-selection-api:8003}"
-      FORUM_SERVICE_URL:     "${FORUM_SERVICE_URL:-forum_service:8004}"
-      ONLINE_TEST_SERVICE_URL: "${ONLINE_TEST_SERVICE_URL:-online_test_service:8005}"
-      GRADE_SERVICE_URL:     "${GRADE_SERVICE_URL:-grade_service:8006}"
+      COURSE_SELECTION_SERVICE_URL: "${COURSE_SELECTION_SERVICE_URL:-course-selection-api:8004}"
+      FORUM_SERVICE_URL:     "${FORUM_SERVICE_URL:-forum_service:8005}"
+      ONLINE_TEST_SERVICE_URL: "${ONLINE_TEST_SERVICE_URL:-online_test_service:8006}"
+      GRADE_SERVICE_URL:     "${GRADE_SERVICE_URL:-grade_service:8007}"
     depends_on:
       auth_service:
         condition: service_healthy
@@ -175,6 +175,61 @@ services:
       - "5173:5173"
     volumes:
       - ${FRONTEND_PATH:-./frontend}:/app
+    networks:
+      - stss-net
+
+  # ── Business service placeholders ─────────────────────────────
+  # These services are documentation/deployment placeholders only.
+  # They are not started by default. Replace image/build/healthcheck with each
+  # group's real backend when that service is ready to be deployed with Gateway.
+  # Usage example: docker compose --profile backend-placeholders up -d
+  schedule_service:
+    image: alpine:3.20
+    container_name: stss-schedule-placeholder
+    profiles: ["backend-placeholders"]
+    command: ["sh", "-c", "echo 'schedule_service placeholder: replace with real backend'; sleep infinity"]
+    expose:
+      - "8003"
+    networks:
+      - stss-net
+
+  course-selection-api:
+    image: alpine:3.20
+    container_name: stss-course-selection-placeholder
+    profiles: ["backend-placeholders"]
+    command: ["sh", "-c", "echo 'course-selection-api placeholder: replace with real backend'; sleep infinity"]
+    expose:
+      - "8004"
+    networks:
+      - stss-net
+
+  forum_service:
+    image: alpine:3.20
+    container_name: stss-forum-placeholder
+    profiles: ["backend-placeholders"]
+    command: ["sh", "-c", "echo 'forum_service placeholder: replace with real backend'; sleep infinity"]
+    expose:
+      - "8005"
+    networks:
+      - stss-net
+
+  online_test_service:
+    image: alpine:3.20
+    container_name: stss-online-test-placeholder
+    profiles: ["backend-placeholders"]
+    command: ["sh", "-c", "echo 'online_test_service placeholder: replace with real backend'; sleep infinity"]
+    expose:
+      - "8006"
+    networks:
+      - stss-net
+
+  grade_service:
+    image: alpine:3.20
+    container_name: stss-grade-placeholder
+    profiles: ["backend-placeholders"]
+    command: ["sh", "-c", "echo 'grade_service placeholder: replace with real backend'; sleep infinity"]
+    expose:
+      - "8007"
     networks:
       - stss-net
 

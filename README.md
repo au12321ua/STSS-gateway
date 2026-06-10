@@ -119,10 +119,10 @@ echo $GITHUB_TOKEN | docker login ghcr.io -u <your-username> --password-stdin
 | `AUTH_SERVICE_URL`          | `auth_service:8001`                         | Auth Service 上游地址                   |
 | `INFO_SERVICE_URL`          | `info_service:8002`                         | Info Service 上游地址                   |
 | `SCHEDULE_SERVICE_URL`      | `schedule_service:8003`                     | Schedule Service 上游地址               |
-| `COURSE_SELECTION_SERVICE_URL` | `course-selection-api:8003`               | Course Selection Service 上游地址       |
-| `FORUM_SERVICE_URL`         | `forum_service:8004`                        | Forum Service 上游地址                  |
-| `ONLINE_TEST_SERVICE_URL`   | `online_test_service:8005`                  | Online Test Service 上游地址            |
-| `GRADE_SERVICE_URL`         | `grade_service:8006`                        | Grade Service 上游地址                  |
+| `COURSE_SELECTION_SERVICE_URL` | `course-selection-api:8004`               | Course Selection Service 上游地址       |
+| `FORUM_SERVICE_URL`         | `forum_service:8005`                        | Forum Service 上游地址                  |
+| `ONLINE_TEST_SERVICE_URL`   | `online_test_service:8006`                  | Online Test Service 上游地址            |
+| `GRADE_SERVICE_URL`         | `grade_service:8007`                        | Grade Service 上游地址                  |
 | `GATEWAY_PORT`              | `8000`                                      | 网关监听端口                            |
 | `CORS_ORIGINS`              | `http://localhost:5173,http://localhost:3000` | 允许的 CORS 域名（逗号分隔）           |
 | `RATE_LIMIT_LOGIN`          | `10r/m`                                     | 登录接口限流速率（Nginx 语法）          |
@@ -248,10 +248,10 @@ docker run -d \
   -e AUTH_SERVICE_URL=auth_service:8001 \
   -e INFO_SERVICE_URL=info_service:8002 \
   -e SCHEDULE_SERVICE_URL=schedule_service:8003 \
-  -e COURSE_SELECTION_SERVICE_URL=course-selection-api:8003 \
-  -e FORUM_SERVICE_URL=forum_service:8004 \
-  -e ONLINE_TEST_SERVICE_URL=online_test_service:8005 \
-  -e GRADE_SERVICE_URL=grade_service:8006 \
+  -e COURSE_SELECTION_SERVICE_URL=course-selection-api:8004 \
+  -e FORUM_SERVICE_URL=forum_service:8005 \
+  -e ONLINE_TEST_SERVICE_URL=online_test_service:8006 \
+  -e GRADE_SERVICE_URL=grade_service:8007 \
   -e CORS_ORIGINS=http://localhost:5173 \
   -v $(pwd)/dist:/usr/share/nginx/html \
   --name stss-gateway \
@@ -267,6 +267,18 @@ docker compose up -d
 # 附带前端开发服务器
 docker compose --profile dev up -d
 ```
+
+`docker-compose.yml` 中还提供了 `backend-placeholders` profile，用来标注其他业务组后端在同一 Docker 网络中的服务名和端口：
+
+```text
+schedule_service:8003
+course-selection-api:8004
+forum_service:8005
+online_test_service:8006
+grade_service:8007
+```
+
+这些占位服务不会默认启动，也不是真实后端。各组服务接入时，请复制对应占位块并替换为真实的 `image` 或 `build`、环境变量和健康检查。
 
 ### 挂载 SPA 静态文件
 
