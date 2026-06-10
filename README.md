@@ -80,9 +80,14 @@ echo $GITHUB_TOKEN | docker login ghcr.io -u <your-username> --password-stdin
 | `/api/v1/auth/*`        | auth_service   | ✅ Bearer | Auth 业务 API         |
 | `/api/v1/internal/*`    | —              | 🚫 403    | 禁止外网访问          |
 | `/api/v1/health`        | 网关自身       | ❌ 无     | 聚合健康检查状态      |
-| `/api/v1/files*`        | info_service   | ✅ Bearer | 10 MiB，60 s 超时     |
-| `/api/v1/users/import`  | info_service   | ✅ Bearer | 10 MiB，60 s 超时     |
-| `/api/v1/*`（其余）     | info_service   | ✅ Bearer | Info 业务 API         |
+| `/api/v1/info/files*`        | info_service   | ✅ Bearer | 10 MiB，60 s 超时     |
+| `/api/v1/info/users/import`  | info_service   | ✅ Bearer | 10 MiB，60 s 超时     |
+| `/api/v1/info/*`        | info_service   | ✅ Bearer | Info 业务 API         |
+| `/api/v1/schedule/*`    | schedule_service | ✅ Bearer | 排课业务 API          |
+| `/api/v1/course-selection/*` | course_selection_service | ✅ Bearer | 智能选课业务 API，支持 SSE |
+| `/api/v1/forum/*`       | forum_service  | ✅ Bearer | 论坛业务 API          |
+| `/api/v1/online-test/*` | online_test_service | ✅ Bearer | 在线测试业务 API      |
+| `/api/v1/grade/*`       | grade_service  | ✅ Bearer | 成绩业务 API          |
 | `/`（SPA 静态文件）     | 本地 `dist/`   | —         | 前端静态资源          |
 
 ## 鉴权流程
@@ -113,6 +118,11 @@ echo $GITHUB_TOKEN | docker login ghcr.io -u <your-username> --password-stdin
 |-----------------------------|---------------------------------------------|-----------------------------------------|
 | `AUTH_SERVICE_URL`          | `auth_service:8001`                         | Auth Service 上游地址                   |
 | `INFO_SERVICE_URL`          | `info_service:8002`                         | Info Service 上游地址                   |
+| `SCHEDULE_SERVICE_URL`      | `schedule_service:8003`                     | Schedule Service 上游地址               |
+| `COURSE_SELECTION_SERVICE_URL` | `course-selection-api:8003`               | Course Selection Service 上游地址       |
+| `FORUM_SERVICE_URL`         | `forum_service:8004`                        | Forum Service 上游地址                  |
+| `ONLINE_TEST_SERVICE_URL`   | `online_test_service:8005`                  | Online Test Service 上游地址            |
+| `GRADE_SERVICE_URL`         | `grade_service:8006`                        | Grade Service 上游地址                  |
 | `GATEWAY_PORT`              | `8000`                                      | 网关监听端口                            |
 | `CORS_ORIGINS`              | `http://localhost:5173,http://localhost:3000` | 允许的 CORS 域名（逗号分隔）           |
 | `RATE_LIMIT_LOGIN`          | `10r/m`                                     | 登录接口限流速率（Nginx 语法）          |
@@ -122,6 +132,8 @@ echo $GITHUB_TOKEN | docker login ghcr.io -u <your-username> --password-stdin
 | `INFO_SERVICE_CLIENT_SECRET`| `change-me-service-secret`                  | Info Service 调用 Auth Service 的凭据   |
 | `ENV`                       | `development`                               | 运行环境（development / production）    |
 | `LOG_LEVEL`                 | `DEBUG`                                     | 日志级别                                |
+
+其中排课、选课、论坛、在线测试、成绩服务可以按组逐步接入。未配置或未启动某个业务服务时，Gateway 仍可启动；只有访问对应 `/api/v1/<module>/*` 路由时会返回上游不可用。
 
 ### 凭据一致性
 
@@ -173,8 +185,8 @@ rate](https://nginx.org/en/docs/http/ngx_http_limit_req_module.html#limit_req_zo
 | 路由                   | `client_max_body_size` |
 |------------------------|------------------------|
 | 所有路由（默认）       | 1 MiB                  |
-| `/api/v1/files`        | 10 MiB                 |
-| `/api/v1/users/import` | 10 MiB                 |
+| `/api/v1/info/files`        | 10 MiB                 |
+| `/api/v1/info/users/import` | 10 MiB                 |
 
 ## 超时配置
 
@@ -235,6 +247,11 @@ docker run -d \
   -p 8000:8000 \
   -e AUTH_SERVICE_URL=auth_service:8001 \
   -e INFO_SERVICE_URL=info_service:8002 \
+  -e SCHEDULE_SERVICE_URL=schedule_service:8003 \
+  -e COURSE_SELECTION_SERVICE_URL=course-selection-api:8003 \
+  -e FORUM_SERVICE_URL=forum_service:8004 \
+  -e ONLINE_TEST_SERVICE_URL=online_test_service:8005 \
+  -e GRADE_SERVICE_URL=grade_service:8006 \
   -e CORS_ORIGINS=http://localhost:5173 \
   -v $(pwd)/dist:/usr/share/nginx/html \
   --name stss-gateway \

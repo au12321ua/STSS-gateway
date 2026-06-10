@@ -24,11 +24,16 @@ services:
     environment:
       AUTH_SERVICE_URL:      "${AUTH_SERVICE_URL:-auth_service:8001}"
       INFO_SERVICE_URL:      "${INFO_SERVICE_URL:-info_service:8002}"
+      SCHEDULE_SERVICE_URL:  "${SCHEDULE_SERVICE_URL:-schedule_service:8003}"
       GATEWAY_PORT:          "${GATEWAY_PORT:-8000}"
       CORS_ORIGINS:          "${CORS_ORIGINS:-http://localhost:5173,http://localhost:3000}"
       RATE_LIMIT_LOGIN:      "${RATE_LIMIT_LOGIN:-10r/m}"
       GATEWAY_CLIENT_ID:     "${GATEWAY_CLIENT_ID:-gateway}"
       GATEWAY_CLIENT_SECRET: "${GATEWAY_CLIENT_SECRET:-change-me-gateway-secret}"
+      COURSE_SELECTION_SERVICE_URL: "${COURSE_SELECTION_SERVICE_URL:-course-selection-api:8003}"
+      FORUM_SERVICE_URL:     "${FORUM_SERVICE_URL:-forum_service:8004}"
+      ONLINE_TEST_SERVICE_URL: "${ONLINE_TEST_SERVICE_URL:-online_test_service:8005}"
+      GRADE_SERVICE_URL:     "${GRADE_SERVICE_URL:-grade_service:8006}"
     depends_on:
       auth_service:
         condition: service_healthy
